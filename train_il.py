@@ -1,14 +1,17 @@
 import numpy as np
 import argparse
 import tensorflow as tf
+import tensorflow.keras as tfk
 from utils import *
+
+KL = tf.keras.layers
 
 tf.config.run_functions_eagerly(True)
 
 class NN(tf.keras.Model):
     def __init__(self, in_size, out_size):
         super(NN, self).__init__()
-        
+
         ######### Your code starts here #########
         # We want to define and initialize the weights & biases of the neural network.
         # - in_size is dim(O)
@@ -18,7 +21,16 @@ class NN(tf.keras.Model):
         #         - tf.keras.initializers.GlorotNormal
         #         - tf.keras.initializers.he_uniform or tf.keras.initializers.he_normal
 
+        self.in_size = in_size
+        self.out_size = out_size
 
+        self.fc1 = tfk.layers.Dense(64, activation="elu", kernel_initializer="glorot_normal")
+        self.fc2 = tfk.layers.Dense(64, activation="elu", kernel_initializer="glorot_normal")
+        self.fc3 = tfk.layers.Dense(128, activation="elu", kernel_initializer="glorot_normal")
+        self.fc4 = tfk.layers.Dense(128, activation="elu", kernel_initializer="glorot_normal")
+        self.fc5 = tfk.layers.Dense(256, activation="elu", kernel_initializer="glorot_normal")
+        self.fc6 = tfk.layers.Dense(256, activation="elu", kernel_initializer="glorot_normal")
+        self.fc7 = tfk.layers.Dense(out_size)
 
         ########## Your code ends here ##########
 
@@ -28,7 +40,15 @@ class NN(tf.keras.Model):
         # We want to perform a forward-pass of the network. Using the weights and biases, this function should give the network output for x where:
         # x is a (?,|O|) tensor that keeps a batch of observations
 
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.fc3(x)
+        x = self.fc4(x)
+        x = self.fc5(x)
+        x = self.fc6(x)
+        x = self.fc7(x)
 
+        return x
 
         ########## Your code ends here ##########
 
@@ -42,21 +62,26 @@ def loss(y_est, y):
     # At the end your code should return the scalar loss value.
     # HINT: Remember, you can penalize steering (0th dimension) and throttle (1st dimension) unequally
 
+    action_losses = tf.reduce_mean(tf.square(y_est - y), axis=0)
 
+    steering_loss = action_losses[0]
+    throttle_loss = action_losses[1]
+
+    return 1e3 * steering_loss + throttle_loss
 
     ########## Your code ends here ##########
-    
+
 
 def nn(data, args):
     """
-    Trains a feedforward NN. 
+    Trains a feedforward NN.
     """
     params = {
         'train_batch_size': 4096,
     }
     in_size = data['x_train'].shape[-1]
     out_size = data['y_train'].shape[-1]
-    
+
     nn_model = NN(in_size, out_size)
     if args.restore:
         nn_model.load_weights('./policies/' + args.scenario.lower() + '_' + args.goal.lower() + '_IL')
@@ -73,8 +98,13 @@ def nn(data, args):
         # 3. Based on the loss calculate the gradient for all weights
         # 4. Run an optimization step on the weights.
         # Helpful Functions: tf.GradientTape(), tf.GradientTape.gradient(), tf.keras.Optimizer.apply_gradients
-        
-        
+
+        with tf.GradientTape() as tape:
+            y_est = nn_model(x)
+            current_loss = loss(y_est, y)
+
+        grads = tape.gradient(current_loss, nn_model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, nn_model.trainable_variables))
 
         ########## Your code ends here ##########
 
@@ -106,9 +136,9 @@ if __name__ == '__main__':
     parser.add_argument("--lr", type=float, help="learning rate for Adam optimizer", default=5e-3)
     parser.add_argument("--restore", action="store_true", default=False)
     args = parser.parse_args()
-    
+
     maybe_makedirs("./policies")
-    
+
     data = load_data(args)
 
     nn(data, args)
