@@ -1,6 +1,8 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow.keras as tfk
 from tensorflow_probability import distributions as tfd
+from tensorflow_probability import bijectors as tfb
 import argparse
 from utils import *
 
@@ -9,7 +11,7 @@ tf.config.run_functions_eagerly(True)
 class NN(tf.keras.Model):
     def __init__(self, in_size, out_size):
         super(NN, self).__init__()
-        
+
         ######### Your code starts here #########
         # We want to define and initialize the weights & biases of the neural network.
         # - in_size is dim(O)
@@ -19,9 +21,18 @@ class NN(tf.keras.Model):
         #         - tf.keras.initializers.GlorotUniform (this is what we tried)
         #         - tf.keras.initializers.GlorotNormal
         #         - tf.keras.initializers.he_uniform or tf.keras.initializers.he_normal
-        
-        
-        
+
+        tril_size = int((out_size + 1) * out_size / 2)
+
+        self.fc1 = tfk.layers.Dense(64, activation="elu", kernel_initializer="glorot_normal")
+        self.fc2 = tfk.layers.Dense(64, activation="elu", kernel_initializer="glorot_normal")
+        self.fc3 = tfk.layers.Dense(128, activation="elu", kernel_initializer="glorot_normal")
+        self.fc4 = tfk.layers.Dense(128, activation="elu", kernel_initializer="glorot_normal")
+        self.fc5 = tfk.layers.Dense(256, activation="elu", kernel_initializer="glorot_normal")
+        self.fc6 = tfk.layers.Dense(256, activation="elu", kernel_initializer="glorot_normal")
+        self.fc7 = tfk.layers.Dense(out_size + tril_size,
+            kernel_initializer=tfk.initializers.random_normal(stddev=1e-3))
+
         ########## Your code ends here ##########
 
     def call(self, x):
@@ -30,13 +41,21 @@ class NN(tf.keras.Model):
         # We want to perform a forward-pass of the network. Using the weights and biases, this function should give the network output for x where:
         # x is a (?, |O|) tensor that keeps a batch of observations
         # IMPORTANT: First two columns of the output tensor must correspond to the mean vector!
-        
-        
-        
+
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.fc3(x)
+        x = self.fc4(x)
+        x = self.fc5(x)
+        x = self.fc6(x)
+        x = self.fc7(x)
+
+        return x
+
         ########## Your code ends here ##########
 
 
-   
+
 def loss(y_est, y):
     y = tf.cast(y, dtype=tf.float32)
     ######### Your code starts here #########
@@ -46,22 +65,27 @@ def loss(y_est, y):
     # At the end your code should return the scalar loss value.
     # HINT: You may find the classes of tensorflow_probability.distributions (imported as tfd) useful.
     #       In particular, you can use MultivariateNormalFullCovariance or MultivariateNormalTriL, but they are not the only way.
-    
-    
-    
+
+    mu = y_est[:, :2]
+    tril_flat = y_est[:, 2:]
+    tril = tfb.FillScaleTriL().forward(tril_flat)
+
+    dist = tfd.MultivariateNormalTriL(mu, tril)
+    return tf.reduce_mean(-dist.log_prob(y))
+
     ########## Your code ends here ##########
 
 
 def nn(data, args):
     """
-    Trains a feedforward NN. 
+    Trains a feedforward NN.
     """
     params = {
         'train_batch_size': 4096*32,
     }
     in_size = data['x_train'].shape[-1]
     out_size = data['y_train'].shape[-1]
-    
+
     nn_model = NN(in_size, out_size)
     if args.restore:
         nn_model.load_weights('./policies/' + args.scenario.lower() + '_' + args.goal.lower() + '_ILDIST')
@@ -78,9 +102,14 @@ def nn(data, args):
         # 3. Based on the loss calculate the gradient for all weights
         # 4. Run an optimization step on the weights.
         # Helpful Functions: tf.GradientTape(), tf.GradientTape.gradient(), tf.keras.Optimizer.apply_gradients
-       
-       
-       
+
+        with tf.GradientTape() as tape:
+            y_est = nn_model(x)
+            current_loss = loss(y_est, y)
+
+        grads = tape.gradient(current_loss, nn_model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, nn_model.trainable_variables))
+
         ########## Your code ends here ##########
 
         train_loss(current_loss)
@@ -112,9 +141,9 @@ if __name__ == '__main__':
     parser.add_argument("--lr", type=float, help="learning rate for Adam optimizer", default=1e-3)
     parser.add_argument("--restore", action="store_true", default=False)
     args = parser.parse_args()
-    
+
     maybe_makedirs("./policies")
-    
+
     data = load_data(args)
 
     nn(data, args)
