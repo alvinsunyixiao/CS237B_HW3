@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow.keras as tfk
 import argparse
 from utils import *
 
@@ -8,7 +9,7 @@ tf.config.run_functions_eagerly(True)
 class NN(tf.keras.Model):
     def __init__(self, in_size, out_size):
         super(NN, self).__init__()
-        
+
         ######### Your code starts here #########
         # We want to define and initialize the weights & biases of the CoIL network.
         # - in_size is dim(O)
@@ -17,9 +18,18 @@ class NN(tf.keras.Model):
         #         - tf.keras.initializers.GlorotUniform (this is what we tried)
         #         - tf.keras.initializers.GlorotNormal
         #         - tf.keras.initializers.he_uniform or tf.keras.initializers.he_normal
-        
-        
-        
+
+        self.fc1 = tfk.layers.Dense(64, activation="elu", kernel_initializer="glorot_normal")
+        self.fc2 = tfk.layers.Dense(64, activation="elu", kernel_initializer="glorot_normal")
+        self.fc3 = tfk.layers.Dense(128, activation="elu", kernel_initializer="glorot_normal")
+        self.fc4 = tfk.layers.Dense(128, activation="elu", kernel_initializer="glorot_normal")
+        self.fc5 = tfk.layers.Dense(256, activation="elu", kernel_initializer="glorot_normal")
+        self.fc6 = tfk.layers.Dense(256, activation="elu", kernel_initializer="glorot_normal")
+
+        self.left = tfk.layers.Dense(out_size)
+        self.straight = tfk.layers.Dense(out_size)
+        self.right = tfk.layers.Dense(out_size)
+
         ########## Your code ends here ##########
 
     def call(self, x, u):
@@ -28,12 +38,27 @@ class NN(tf.keras.Model):
         ######### Your code starts here #########
         # We want to perform a forward-pass of the network. Using the weights and biases, this function should give the network output for (x,u) where:
         # - x is a (?, |O|) tensor that keeps a batch of observations
-        # - u is a (?, 1) tensor (a vector indeed) that keeps the high-level commands (goals) to denote which branch of the network to use 
-        # FYI: For the intersection scenario, u=0 means the goal is to turn left, u=1 straight, and u=2 right. 
+        # - u is a (?, 1) tensor (a vector indeed) that keeps the high-level commands (goals) to denote which branch of the network to use
+        # FYI: For the intersection scenario, u=0 means the goal is to turn left, u=1 straight, and u=2 right.
         # HINT 1: Looping over all data samples may not be the most computationally efficient way of doing branching
         # HINT 2: While implementing this, we found tf.math.equal and tf.cast useful. This is not necessarily a requirement though.
-        
 
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.fc3(x)
+        x = self.fc4(x)
+        x = self.fc5(x)
+        x = self.fc6(x)
+
+        left = self.left(x)
+        straight = self.straight(x)
+        right = self.right(x)
+
+        is_left = tf.cast(u == 0, tf.float32)
+        is_straight = tf.cast(u == 1, tf.float32)
+        is_right = tf.cast(u == 2, tf.float32)
+
+        return left * is_left + straight * is_straight + right * is_right
 
         ########## Your code ends here ##########
 
@@ -47,21 +72,26 @@ def loss(y_est, y):
     # At the end your code should return the scalar loss value.
     # HINT: Remember, you can penalize steering (0th dimension) and throttle (1st dimension) unequally
 
+    action_losses = tf.reduce_mean(tf.square(y_est - y), axis=0)
 
+    steering_loss = action_losses[0]
+    throttle_loss = action_losses[1]
+
+    return 3e3 * steering_loss + throttle_loss
 
     ########## Your code ends here ##########
-   
+
 
 def nn(data, args):
     """
-    Trains a feedforward NN. 
+    Trains a feedforward NN.
     """
     params = {
         'train_batch_size': 4096,
     }
     in_size = data['x_train'].shape[-1]
     out_size = data['y_train'].shape[-1]
-    
+
     nn_model = NN(in_size, out_size)
     if args.restore:
         nn_model.load_weights('./policies/' + args.scenario.lower() + '_' + args.goal.lower() + '_CoIL')
@@ -78,8 +108,13 @@ def nn(data, args):
         # 3. Based on the loss calculate the gradient for all weights
         # 4. Run an optimization step on the weights.
         # Helpful Functions: tf.GradientTape(), tf.GradientTape.gradient(), tf.keras.Optimizer.apply_gradients
-        
-        
+
+        with tf.GradientTape() as tape:
+            y_est = nn_model(x, u)
+            current_loss = loss(y_est, y)
+
+        grads = tape.gradient(current_loss, nn_model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, nn_model.trainable_variables))
 
         ########## Your code ends here ##########
 
@@ -111,9 +146,9 @@ if __name__ == '__main__':
     parser.add_argument("--restore", action="store_true", default=False)
     args = parser.parse_args()
     args.goal = 'all'
-    
+
     maybe_makedirs("./policies")
-    
+
     data = load_data(args)
 
     nn(data, args)

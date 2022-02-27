@@ -6,6 +6,8 @@ import time
 import argparse
 from gym_carlo.envs.interactive_controllers import KeyboardController
 from scipy.stats import multivariate_normal
+from tensorflow_probability import bijectors as tfb
+from tensorflow_probability import distributions as tfd
 from train_ildist import NN
 from utils import *
 
@@ -16,14 +18,14 @@ if __name__ == '__main__':
     scenario_name = args.scenario.lower()
     assert scenario_name in scenario_names, '--scenario argument is invalid!'
     assert scenario_name != 'intersection', '--scenario cannot be intersection for shared_autonomy.py' # we don't have the optimal policy for that
-    
+
     env = gym.make(scenario_name + 'Scenario-v0', goal=len(goals[scenario_name]))
-    
+
     nn_models = {}
     for goal in goals[scenario_name]:
         nn_models[goal] = NN(obs_sizes[scenario_name],2)
         nn_models[goal].load_weights('./policies/' + scenario_name + '_' + goal + '_ILDIST')
-        
+
     max_steering = 0.05
     max_throttle = 0.
 
@@ -32,20 +34,20 @@ if __name__ == '__main__':
         env.seed(int(np.random.rand()*1e6))
         obs, done = env.reset(), False
         env.render()
-        
+
         optimal_action = {}
         interactive_policy = KeyboardController(env.world, steering_lims[scenario_name])
         scores = np.array([[1./len(goals[scenario_name])]*len(goals[scenario_name])]*100)
         while not done:
             t = time.time()
             obs = np.array(obs).reshape(1,-1)
-            
+
             for goal_id in range(len(goals[scenario_name])):
                 if args.scenario.lower() == 'circularroad':
                     optimal_action[goals[scenario_name][goal_id]] = optimal_act_circularroad(env, goal_id)
                 elif args.scenario.lower() == 'lanechange':
                     optimal_action[goals[scenario_name][goal_id]] = optimal_act_lanechange(env, goal_id)
-            
+
             ######### Your code starts here #########
             # We want to compute the expected human action and generate the robot action.
             # The following variables should be sufficient:
@@ -59,12 +61,23 @@ if __name__ == '__main__':
             # At the end, your code should set a_robot variable as a 1x2 numpy array that consists of steering and throttle values, respectively
             # HINT: You can use np.clip to threshold a_robot with respect to the magnitude constraints
 
+            pg = np.mean(scores[-20:], axis=0)
+            print(pg)
+            a_robot = np.zeros((1, 2))
+            outputs = {}
+            for i, goal in enumerate(goals[scenario_name]):
+                outputs[goal] = nn_models[goal](obs)
+                a_human_exp = outputs[goal][:, :2].numpy()
+                a_robot += pg[i] * (optimal_action[goal] - a_human_exp)
 
+            # apply thresholding
+            threshold = np.array([max_steering, max_throttle])
+            a_robot[0] = np.clip(a_robot[0], -threshold, threshold)
 
             ########## Your code ends here ##########
-            
+
             a_human = np.array([interactive_policy.steering, optimal_action[goals[scenario_name][0]][0,1]]).reshape(1,-1)
-            
+
             ######### Your code starts here #########
             # Having seen the human_action, we want to infer the human intent.
             # The following variables should be sufficient:
@@ -74,16 +87,23 @@ if __name__ == '__main__':
             # - obs (1 x dim(O) numpy array) is the current observation
             # - a_human (1 x 2 numpy array) is the current action the user took when the observation is obs
             # At the end, your code should set probs variable as a 1 x |G| numpy array that consists of the probability of each goal under obs and a_human
-            # HINT: This should be very similar to the part in intent_inference.py 
+            # HINT: This should be very similar to the part in intent_inference.py
 
-
+            probs = np.zeros(len(goals[scenario_name]))
+            for i, goal in enumerate(goals[scenario_name]):
+                mu = outputs[goal][:, :2]
+                l = outputs[goal][:, 2:]
+                scale_tril = tfb.FillScaleTriL().forward(l)
+                dist = tfd.MultivariateNormalTriL(mu, scale_tril)
+                probs[i] = dist.prob(a_human).numpy()[0]
+            probs = probs[np.newaxis] / np.sum(probs)
 
             ########## Your code ends here ##########
 
             # shift the scores and append the latest one
             scores[:-1] = scores[1:]
             scores[-1] = probs
-            
+
             action = a_robot + a_human
             obs,_,done,_ = env.step(action.reshape(-1))
             env.render()
